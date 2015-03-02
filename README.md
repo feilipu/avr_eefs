@@ -1,4 +1,4 @@
-eefs
+avr_eefs
 ====
 
 EEPROM File System

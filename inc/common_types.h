@@ -3,13 +3,13 @@
 **  Filename:
 **    $Id: common_types.h 1.2 2011/05/17 14:54:35GMT-05:00 sslegel Exp  $
 **
-**      Copyright (c) 2004-2014, United States government as represented by the 
-**      administrator of the National Aeronautics Space Administration.  
-**      All rights reserved. This software was created at NASAs Goddard 
+**      Copyright (c) 2004-2014, United States government as represented by the
+**      administrator of the National Aeronautics Space Administration.
+**      All rights reserved. This software was created at NASAs Goddard
 **      Space Flight Center pursuant to government contracts.
 **
-**      This is governed by the NASA Open Source Agreement and may be used, 
-**      distributed and modified only pursuant to the terms of that agreement. 
+**      This is governed by the NASA Open Source Agreement and may be used,
+**      distributed and modified only pursuant to the terms of that agreement.
 **
 **  Purpose:
 **	    Unit specification for common types.
@@ -27,9 +27,9 @@
 **  $Date: 2011/05/17 14:54:35GMT-05:00 $
 **  $Revision: 1.2 $
 **  $Log: common_types.h  $
-**  Revision 1.2 2011/05/17 14:54:35GMT-05:00 sslegel 
+**  Revision 1.2 2011/05/17 14:54:35GMT-05:00 sslegel
 **  Merged in code walkthrough changes from GPM
-**  Revision 1.2 2011/04/26 14:06:02EDT sslegel 
+**  Revision 1.2 2011/04/26 14:06:02EDT sslegel
 **  EEFS Code Review Changes
 **-------------------------------------------------------------------------*/
 
@@ -48,7 +48,7 @@
 ** Define compiler specific macros
 ** The __extension__ compiler pragma is required
 ** for the uint64 type using GCC with the ANSI C90 standard.
-** Other macros can go in here as needed, for example alignment 
+** Other macros can go in here as needed, for example alignment
 ** pragmas.
 */
 #if defined (__GNUC__)
@@ -56,9 +56,9 @@
    #define OS_PACK        __attribute__ ((packed))
    #define OS_ALIGN(n)  __attribute__((aligned(n)))
 #else
-   #define _EXTENSION_ 
+   #define _EXTENSION_
    #define OS_PACK
-   #define OS_ALIGN(n) 
+   #define OS_ALIGN(n)
 #endif
 
 #if defined(_ix86_)
@@ -78,6 +78,12 @@
   typedef unsigned short int                    uint16;
   typedef unsigned long int                     uint32;
   _EXTENSION_ typedef unsigned long long int    uint64;
+
+#elif defined( __AVR_MEGA__ )
+/* ----------------------- AVR ATmega processor family -------------------------*/
+  /* Little endian */
+  #undef   _STRUCT_HIGH_BIT_FIRST_
+  #define  _STRUCT_LOW_BIT_FIRST_				// seems to be unused
 
 #elif defined(__PPC__)
    /* ----------------------- Motorola Power PC family ---------------------------*/

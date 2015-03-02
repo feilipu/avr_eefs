@@ -1,10 +1,10 @@
 /*
-**      Copyright (c) 2010-2014, United States government as represented by the 
-**      administrator of the National Aeronautics Space Administration.  
-**      All rights reserved. This software was created at NASAs Goddard 
+**      Copyright (c) 2010-2014, United States government as represented by the
+**      administrator of the National Aeronautics Space Administration.
+**      All rights reserved. This software was created at NASAs Goddard
 **      Space Flight Center pursuant to government contracts.
 **
-**      This is governed by the NASA Open Source Agreement and may be used, 
+**      This is governed by the NASA Open Source Agreement and may be used,
 **      distributed and modified only pursuant to the terms of that agreement.
 */
 
@@ -12,7 +12,7 @@
  * Filename: eefs_fileapi.c
  *
  * Purpose: This file contains the lower level interface functions to the eeprom file system api functions.  These functions
- *   are volume or device independent, so most functions require a pointer to a inode table.  All api functions are designed 
+ *   are volume or device independent, so most functions require a pointer to a inode table.  All api functions are designed
  *   to be as similar to a standard unix file system api as possible.
  *
  */
@@ -20,100 +20,95 @@
 /*
  * Includes
  */
-
-#include "common_types.h"
-#include "eefs_fileapi.h"
-#include "eefs_macros.h"
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include "eefs_swap.h"
 
-/*
- * Macro Definitions
- */
+#include "common_types.h"
 
-#define EEFS_MAX(x,y) (((x) > (y)) ? (x) : (y))
-#define EEFS_MIN(x,y) (((x) < (y)) ? (x) : (y))
-#define EEFS_ROUND_UP(x, align)	(((int) (x) + (align - 1)) & ~(align - 1))
+#include "eefs_fileapi.h"
+#include "eefs_macros.h"
 
 /*
  * Local Data
  */
 
 /* Note: the file descriptors are shared across all file systems */
-uint32                          EEFS_FileDescriptorsInUse;
-uint32                          EEFS_FileDescriptorsHighWaterMark;
-EEFS_FileDescriptor_t           EEFS_FileDescriptorTable[EEFS_MAX_OPEN_FILES];
+static uint8_t						EEFS_FileDescriptorsInUse;
+static uint8_t						EEFS_FileDescriptorsHighWaterMark;
+static EEFS_FileDescriptor_t		EEFS_FileDescriptorTable[EEFS_MAX_OPEN_FILES];
 
 /* Note: at the moment there is only one directory descriptor, so only one process can use it at a time */
-EEFS_DirectoryDescriptor_t      EEFS_DirectoryDescriptor;
-EEFS_DirectoryEntry_t           EEFS_DirectoryEntry;
+EEFS_DirectoryDescriptor_t			EEFS_DirectoryDescriptor;
+EEFS_DirectoryEntry_t				EEFS_DirectoryEntry;
 
 /*
  * Local Function Prototypes
  */
 
-int32                           EEFS_LibOpenFile(EEFS_InodeTable_t *InodeTable, int32 InodeIndex, uint32 Flags, uint32 Attributes);
-int32                           EEFS_LibCreatFile(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Attributes);
-uint32                          EEFS_LibFmode(EEFS_InodeTable_t *InodeTable, uint32 InodeIndex);
-int32                           EEFS_LibFindFile(EEFS_InodeTable_t *InodeTable, char *Filename);
-int32                           EEFS_LibGetFileDescriptor(void);
-int32                           EEFS_LibFreeFileDescriptor(int32 FileDescriptor);
-uint8                           EEFS_LibIsValidFileDescriptor(int32 FileDescriptor);
-uint8                           EEFS_LibHasOpenCreat(EEFS_InodeTable_t *InodeTable);
-uint8                           EEFS_LibIsValidFilename(char *Filename);
+int8_t                          EEFS_LibOpenFile(EEFS_InodeTable_t *InodeTable, int32_t InodeIndex, uint32_t Flags, uint32_t Attributes);
+int8_t                          EEFS_LibCreatFile(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, uint32_t Attributes);
+uint32_t                        EEFS_LibFmode(EEFS_InodeTable_t *InodeTable, uint32_t InodeIndex);
+int8_t                          EEFS_LibFindFile(EEFS_InodeTable_t *InodeTable, uint8_t *Filename);
+int8_t                          EEFS_LibGetFileDescriptor(void);
+int8_t                          EEFS_LibFreeFileDescriptor(int8_t FileDescriptor);
+uint8_t                         EEFS_LibIsValidFileDescriptor(int8_t FileDescriptor);
+uint8_t                         EEFS_LibHasOpenCreat(EEFS_InodeTable_t *InodeTable);
+uint8_t                         EEFS_LibIsValidFilename(uint8_t *Filename);
 
 /*
  * Function Definitions
  */
 
 /* Initialize global data shared by all file systems */
-void EEFS_LibInit(void)
+int8_t EEFS_LibInit(void)
 {
     EEFS_FileDescriptorsInUse = 0;
     EEFS_FileDescriptorsHighWaterMark = 0;
     memset(EEFS_FileDescriptorTable, 0, sizeof(EEFS_FileDescriptorTable));
     memset(&EEFS_DirectoryDescriptor, 0, sizeof(EEFS_DirectoryDescriptor_t));
     memset(&EEFS_DirectoryEntry, 0, sizeof(EEFS_DirectoryEntry_t));
+    return EEFS_LIB_INIT;					// this sets up the SPI bus & SPI semaphore and initialises the semaphore for locking the EEFS.
 
 } /* End of EEFS_LibInit() */
 
 /* Initializes the Inode Table.  Returns EEFS_SUCCESS on success, EEFS_NO_SUCH_DEVICE or EEFS_INVALID_ARGUMENT on error. */
-int32 EEFS_LibInitFS(EEFS_InodeTable_t *InodeTable, uint32 BaseAddress)
+int8_t EEFS_LibInitFS(EEFS_InodeTable_t *InodeTable, uint32_t BaseAddress)
 {
-    EEFS_FileAllocationTable_t         *FileAllocationTable;
+	uint32_t							BaseAddressRoot;
+	EEFS_FileAllocationTable_t         *FileAllocationTable;
     EEFS_FileAllocationTableHeader_t    FileAllocationTableHeader;
     EEFS_FileAllocationTableEntry_t     FileAllocationTableEntry;
-    uint32                              i;
-    int32                               ReturnCode;
-  
+    int8_t                              ReturnCode;
+
     EEFS_LIB_LOCK;
     if (InodeTable != NULL) {
 
         /* Load the File Allocation Table Header from EEPROM */
-        FileAllocationTable = (void *)BaseAddress;
-        EEFS_LIB_EEPROM_READ(&FileAllocationTableHeader, &FileAllocationTable->Header, sizeof(EEFS_FileAllocationTableHeader_t));
-        EEFS_SwapFileAllocationTableHeader(&FileAllocationTableHeader);/*APC */
+        FileAllocationTable = (EEFS_FileAllocationTable_t *)(uint16_t)BaseAddress;
+        BaseAddressRoot = BaseAddress - (uint32_t)(uint16_t)FileAllocationTable;
+        EEFS_LIB_EEPROM_READ(&FileAllocationTableHeader, (BaseAddressRoot + (uint32_t)(uint16_t)&FileAllocationTable->Header), sizeof(EEFS_FileAllocationTableHeader_t));
+
+
         if ((FileAllocationTableHeader.Magic == EEFS_FILESYS_MAGIC) &&
             (FileAllocationTableHeader.Version == 1) &&
             (FileAllocationTableHeader.NumberOfFiles <= EEFS_MAX_FILES)) {
-
-            /* Initialize the Inode Table */
+           /* Initialize the Inode Table */
             memset(InodeTable, 0, sizeof(EEFS_InodeTable_t));
             InodeTable->BaseAddress = BaseAddress;
-            InodeTable->FreeMemoryPointer = (void *)(InodeTable->BaseAddress + FileAllocationTableHeader.FreeMemoryOffset);
+            InodeTable->FreeMemoryPointer = InodeTable->BaseAddress + FileAllocationTableHeader.FreeMemoryOffset;
             InodeTable->FreeMemorySize = FileAllocationTableHeader.FreeMemorySize;
             InodeTable->NumberOfFiles = FileAllocationTableHeader.NumberOfFiles;
-            for (i=0; i < InodeTable->NumberOfFiles; i++) {
-                EEFS_LIB_EEPROM_READ(&FileAllocationTableEntry, &FileAllocationTable->File[i], sizeof(EEFS_FileAllocationTableEntry_t));
-                EEFS_SwapFileAllocationTableEntry(&FileAllocationTableEntry); /* APC */
-                InodeTable->File[i].FileHeaderPointer = (void *)(BaseAddress + FileAllocationTableEntry.FileHeaderOffset);
+            for (uint32_t i=0; i < InodeTable->NumberOfFiles; ++i) {
+                EEFS_LIB_EEPROM_READ(&FileAllocationTableEntry, (BaseAddressRoot + (uint32_t)(uint16_t)&FileAllocationTable->File[i]), sizeof(EEFS_FileAllocationTableEntry_t));
+                InodeTable->File[i].FileHeaderPointer = BaseAddress + FileAllocationTableEntry.FileHeaderOffset;
                 InodeTable->File[i].MaxFileSize = FileAllocationTableEntry.MaxFileSize;
             }
             ReturnCode = EEFS_SUCCESS;
         }
         else { /* invalid file allocation table */
-            ReturnCode = EEFS_NO_SUCH_DEVICE;
+            ReturnCode = EEFS_DEVICE_INVALID_FAT;
         }
     }
     else { /* invalid inode table */
@@ -121,14 +116,14 @@ int32 EEFS_LibInitFS(EEFS_InodeTable_t *InodeTable, uint32 BaseAddress)
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibInitFS() */
 
 /* Clears the Inode Table.  Returns EEFS_SUCCESS on success, EEFS_DEVICE_IS_BUSY or EEFS_INVALID_ARGUMENT on error. */
-int32 EEFS_LibFreeFS(EEFS_InodeTable_t *InodeTable)
+int8_t EEFS_LibFreeFS(EEFS_InodeTable_t *InodeTable)
 {
-    int32       ReturnCode;
+    int8_t       ReturnCode;
 
     EEFS_LIB_LOCK;
     if (InodeTable != NULL) {
@@ -140,7 +135,7 @@ int32 EEFS_LibFreeFS(EEFS_InodeTable_t *InodeTable)
             ReturnCode = EEFS_SUCCESS;
         }
         else { /* files or directory descriptor open */
-            ReturnCode = EEFS_DEVICE_IS_BUSY;
+            ReturnCode = EEFS_VOLUME_IS_BUSY;
         }
     }
     else { /* invalid inode table */
@@ -148,18 +143,18 @@ int32 EEFS_LibFreeFS(EEFS_InodeTable_t *InodeTable)
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibFreeFS() */
 
 /* Opens the specified file for read or write access.  This function supports the following Flags (O_RDONLY, O_WRONLY,
- * O_RDWR, O_TRUNC, O_CREAT).  Files can always be opened for shared read access, however files cannot be opened more than 
+ * O_RDWR, O_TRUNC, O_CREAT).  Files can always be opened for shared read access, however files cannot be opened more than
  * once for shared write access.  Returns a file descriptor on success, EEFS_NO_FREE_FILE_DESCRIPTOR, EEFS_PERMISSION_DENIED,
  * EEFS_INVALID_ARGUMENT, or EEFS_FILE_NOT_FOUND on error. */
-int32 EEFS_LibOpen(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Flags, uint32 Attributes)
+int8_t EEFS_LibOpen(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, uint32_t Flags, uint32_t Attributes)
 {
-    int32                           InodeIndex;
-    int32                           ReturnCode;
+    int32_t							InodeIndex;
+    int8_t							ReturnCode;
 
     EEFS_LIB_LOCK;
     if (InodeTable != NULL) {
@@ -167,20 +162,20 @@ int32 EEFS_LibOpen(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Flags, 
         if (EEFS_LibIsValidFilename(Filename)) {
 
             if ((InodeIndex = EEFS_LibFindFile(InodeTable, Filename)) != EEFS_FILE_NOT_FOUND) {
-                
+
                 ReturnCode = EEFS_LibOpenFile(InodeTable, InodeIndex, Flags, Attributes);
             }
             else if (Flags & O_CREAT) {
-            
+
                 ReturnCode = EEFS_LibCreatFile(InodeTable, Filename, EEFS_ATTRIBUTE_NONE);
-            }           
+            }
             else { /* file not found */
-            
+
                 ReturnCode = EEFS_FILE_NOT_FOUND;
             }
         }
         else { /* invalid filename size */
-            ReturnCode = EEFS_INVALID_ARGUMENT;
+            ReturnCode = EEFS_VOLUME_NAME_TOO_LONG;
         }
     }
     else { /* invalid inode table */
@@ -188,8 +183,8 @@ int32 EEFS_LibOpen(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Flags, 
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibOpen() */
 
 /* Creates a new file and opens it for writing.  If the file already exists then the existing file is opened for write
@@ -199,10 +194,10 @@ int32 EEFS_LibOpen(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Flags, 
  * is allocated for the file while it is open, only one new file can be created at a time. Returns a file descriptor on
  * success, EEFS_NO_FREE_FILE_DESCRIPTOR, EEFS_PERMISSION_DENIED, EEFS_INVALID_ARGUMENT, or EEFS_NO_SPACE_LEFT_ON_DEVICE
  * on error.*/
-int32 EEFS_LibCreat(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Attributes)
+int8_t EEFS_LibCreat(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, uint32_t Attributes)
 {
-    int32                               InodeIndex;
-    int32                               ReturnCode;
+    int32_t                          InodeIndex;
+    int8_t                           ReturnCode;
 
     EEFS_LIB_LOCK;
     if (InodeTable != NULL) {
@@ -220,7 +215,7 @@ int32 EEFS_LibCreat(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Attrib
             }
         }
         else { /* filename too long */
-            ReturnCode = EEFS_INVALID_ARGUMENT;
+            ReturnCode = EEFS_VOLUME_NAME_TOO_LONG;
         }
     }
     else { /* invalid inode table */
@@ -228,22 +223,22 @@ int32 EEFS_LibCreat(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Attrib
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibCreat() */
 
 /* Internal function to open a file. */
-int32 EEFS_LibOpenFile(EEFS_InodeTable_t *InodeTable, int32 InodeIndex, uint32 Flags, uint32 Attributes)
+int8_t EEFS_LibOpenFile(EEFS_InodeTable_t *InodeTable, int32_t InodeIndex, uint32_t Flags, uint32_t Attributes)
 {
-    int32                           FileDescriptor;
+    int8_t                          FileDescriptor;
     EEFS_FileHeader_t               FileHeader;
-    int32                           ReturnCode;
-    uint32                          Fmode;
+    int8_t                          ReturnCode;
+    uint32_t                        Fmode;
 
     (void)Attributes;  /* Unsupported at this time */
 
     /* Verify that the Flags field does not contain any unsupported options */
-    if ((Flags & ~(O_RDONLY | O_WRONLY | O_RDWR | O_TRUNC | O_CREAT)) == 0) { 
+    if ((Flags & ~(O_RDONLY | O_WRONLY | O_RDWR | O_TRUNC | O_CREAT)) == 0) {
 
         /* Don't allow the file to be opened for write if the file system is write protected */
         if (((Flags & O_ACCMODE) == O_RDONLY) ||                             /* open only for reading OR */
@@ -251,7 +246,6 @@ int32 EEFS_LibOpenFile(EEFS_InodeTable_t *InodeTable, int32 InodeIndex, uint32 F
 
             /* Don't allow the file to be opened for write if it has the read only attribute set */
             EEFS_LIB_EEPROM_READ(&FileHeader, InodeTable->File[InodeIndex].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-            EEFS_SwapFileHeader(&FileHeader); /* APC */
             if (((Flags & O_ACCMODE) == O_RDONLY) ||                         /* open only for reading OR */
                  (FileHeader.Attributes & EEFS_ATTRIBUTE_READONLY) == 0) {   /* open for writing and read only file attribute not set */
 
@@ -306,18 +300,18 @@ int32 EEFS_LibOpenFile(EEFS_InodeTable_t *InodeTable, int32 InodeIndex, uint32 F
         ReturnCode = EEFS_INVALID_ARGUMENT;
     }
 
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibOpenFile() */
 
 /* Internal function to create a new file */
-int32 EEFS_LibCreatFile(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Attributes)
+int8_t EEFS_LibCreatFile(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, uint32_t Attributes)
 {
 
     EEFS_FileHeader_t                   FileHeader;
-    int32                               InodeIndex;
-    int32                               FileDescriptor;
-    int32                               ReturnCode;
+    int32_t                             InodeIndex;
+    int8_t                              FileDescriptor;
+    int8_t                              ReturnCode;
 
     /* If the file system is not write protected */
     if (EEFS_LIB_IS_WRITE_PROTECTED == FALSE) {
@@ -339,7 +333,7 @@ int32 EEFS_LibCreatFile(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 At
                             /* Add the new entry to the InodeTable.  Temporarily set the MaxFileSize equal to all free eeprom.
                              * The FreeMemoryPointer and the FreeMemorySize variables are NOT updated until the file is
                              * closed and the actual file size is known.  Setting EEFS_FCREAT in the Mode variable
-                             * will prevent any other file creations until the current one is complete and the FreeMemoryPointer 
+                             * will prevent any other file creations until the current one is complete and the FreeMemoryPointer
                              * and the FreeMemorySize variables are updated. */
                             InodeIndex = InodeTable->NumberOfFiles;
                             InodeTable->NumberOfFiles++;
@@ -353,7 +347,7 @@ int32 EEFS_LibCreatFile(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 At
                             FileHeader.FileSize = 0;
                             FileHeader.ModificationDate = EEFS_LIB_TIME;
                             FileHeader.CreationDate = FileHeader.ModificationDate;
-                            strncpy(FileHeader.Filename, Filename, EEFS_MAX_FILENAME_SIZE);
+                            strncpy((char *)FileHeader.Filename, (const char *)Filename, EEFS_MAX_FILENAME_SIZE);
                             EEFS_LIB_EEPROM_WRITE(InodeTable->File[InodeIndex].FileHeaderPointer, &FileHeader, sizeof(EEFS_FileHeader_t));
                             EEFS_LIB_EEPROM_FLUSH;
 
@@ -387,30 +381,31 @@ int32 EEFS_LibCreatFile(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 At
             }
         }
         else { /* no available slots in the File Allocation Table */
-            ReturnCode = EEFS_NO_SPACE_LEFT_ON_DEVICE;
+            ReturnCode = EEFS_VOLUME_CANT_ALLOCATE_NEW;
         }
     }
     else { /* file system is write protected */
         ReturnCode = EEFS_READ_ONLY_FILE_SYSTEM;
     }
 
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibCreatFile() */
 
 /* Closes a file.  Returns EEFS_SUCCESS on success or EEFS_INVALID_ARGUMENT on error.  If a new file is being created then the
  * MaxFileSize is updated to be the actual size of the file + EEFS_DEFAULT_CREAT_SPARE_BYTES. Note that the File Allocation
  * Table is not updated until the file is closed to reduce the number of EEPROM Writes. */
-int32 EEFS_LibClose(int32 FileDescriptor)
+int8_t EEFS_LibClose(int8_t FileDescriptor)
 {
-    EEFS_FileAllocationTable_t         *FileAllocationTable;
+    uint32_t							BaseAddressRoot;
+	EEFS_FileAllocationTable_t         *FileAllocationTable;
     EEFS_FileAllocationTableHeader_t    FileAllocationTableHeader;
     EEFS_FileAllocationTableEntry_t     FileAllocationTableEntry;
     EEFS_FileHeader_t                   FileHeader;
-    uint32                              MaxFileSize;
+    uint32_t                            MaxFileSize;
     EEFS_InodeTable_t                  *InodeTable;
-    uint32                              InodeIndex;
-    int32                               ReturnCode;
+    uint32_t                            InodeIndex;
+    int8_t                             ReturnCode;
 
     EEFS_LIB_LOCK;
     if (EEFS_LibIsValidFileDescriptor(FileDescriptor) == TRUE) {
@@ -432,45 +427,39 @@ int32 EEFS_LibClose(int32 FileDescriptor)
             InodeTable->FreeMemoryPointer += (sizeof(EEFS_FileHeader_t) + MaxFileSize);
             InodeTable->FreeMemorySize -= (sizeof(EEFS_FileHeader_t) + MaxFileSize);
             InodeTable->File[InodeIndex].MaxFileSize = MaxFileSize;
-            
+
             /* Update the File Header */
             EEFS_LIB_EEPROM_READ(&FileHeader, EEFS_FileDescriptorTable[FileDescriptor].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-            EEFS_SwapFileHeader(&FileHeader); /* APC */
             FileHeader.FileSize = EEFS_FileDescriptorTable[FileDescriptor].FileSize;
             FileHeader.Crc = 0;      /* Automatically updating the CRC is not supported at this time */
-            EEFS_SwapFileHeader(&FileHeader); /* APC */
             EEFS_LIB_EEPROM_WRITE(EEFS_FileDescriptorTable[FileDescriptor].FileHeaderPointer, &FileHeader, sizeof(EEFS_FileHeader_t));
             EEFS_LIB_EEPROM_FLUSH;
 
             /* Add the new entry to the File Allocation Table */
-            FileAllocationTable = (void *)InodeTable->BaseAddress;
+            FileAllocationTable = (EEFS_FileAllocationTable_t*)(uint16_t)(InodeTable->BaseAddress);
+            BaseAddressRoot = InodeTable->BaseAddress - (uint32_t)(uint16_t)FileAllocationTable;
 
-            FileAllocationTableEntry.FileHeaderOffset = (uint32)(InodeTable->File[InodeIndex].FileHeaderPointer - InodeTable->BaseAddress);
+            FileAllocationTableEntry.FileHeaderOffset = (uint32_t)(InodeTable->File[InodeIndex].FileHeaderPointer - InodeTable->BaseAddress);
             FileAllocationTableEntry.MaxFileSize = InodeTable->File[InodeIndex].MaxFileSize;
-            EEFS_SwapFileAllocationTableEntry(&FileAllocationTableEntry); /* APC */
-            EEFS_LIB_EEPROM_WRITE(&FileAllocationTable->File[InodeIndex], &FileAllocationTableEntry, sizeof(EEFS_FileAllocationTableEntry_t));
+            EEFS_LIB_EEPROM_WRITE((BaseAddressRoot + (uint32_t)(uint16_t)&FileAllocationTable->File[InodeIndex]), &FileAllocationTableEntry, sizeof(EEFS_FileAllocationTableEntry_t));
             EEFS_LIB_EEPROM_FLUSH;
 
-            /* This is done last to reduce the chance that a reset during a file creat will cause the file system to be corrupted.  If a 
+            /* This is done last to reduce the chance that a reset during a file creat will cause the file system to be corrupted.  If a
                reset occurs the new file will not exist in the file system until the following lines of code are executed. */
-            EEFS_LIB_EEPROM_READ(&FileAllocationTableHeader, &FileAllocationTable->Header, sizeof(EEFS_FileAllocationTableHeader_t));
-            EEFS_SwapFileAllocationTableHeader(&FileAllocationTableHeader);/*APC */
-            FileAllocationTableHeader.FreeMemoryOffset = (uint32)(InodeTable->FreeMemoryPointer - InodeTable->BaseAddress);
+            EEFS_LIB_EEPROM_READ(&FileAllocationTableHeader, (BaseAddressRoot + (uint32_t)(uint16_t)&FileAllocationTable->Header), sizeof(EEFS_FileAllocationTableHeader_t));
+            FileAllocationTableHeader.FreeMemoryOffset = (uint32_t)(InodeTable->FreeMemoryPointer - InodeTable->BaseAddress);
             FileAllocationTableHeader.FreeMemorySize = InodeTable->FreeMemorySize;
             FileAllocationTableHeader.NumberOfFiles = InodeTable->NumberOfFiles;
-            EEFS_SwapFileAllocationTableHeader(&FileAllocationTableHeader);/*APC */
-            EEFS_LIB_EEPROM_WRITE(&FileAllocationTable->Header, &FileAllocationTableHeader, sizeof(EEFS_FileAllocationTableHeader_t));
+            EEFS_LIB_EEPROM_WRITE((BaseAddressRoot + (uint32_t)(uint16_t)&FileAllocationTable->Header), &FileAllocationTableHeader, sizeof(EEFS_FileAllocationTableHeader_t));
             EEFS_LIB_EEPROM_FLUSH;
         }
         else if (EEFS_FileDescriptorTable[FileDescriptor].Mode & EEFS_FWRITE) {
-            
+
             /* Update the File Header */
             EEFS_LIB_EEPROM_READ(&FileHeader, EEFS_FileDescriptorTable[FileDescriptor].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-            EEFS_SwapFileHeader(&FileHeader); /* APC */
             FileHeader.FileSize = EEFS_FileDescriptorTable[FileDescriptor].FileSize;
             FileHeader.ModificationDate = EEFS_LIB_TIME;
             FileHeader.Crc = 0;   /* Automatically updating the CRC is not supported at this time */
-            EEFS_SwapFileHeader(&FileHeader); /* APC */
             EEFS_LIB_EEPROM_WRITE(EEFS_FileDescriptorTable[FileDescriptor].FileHeaderPointer, &FileHeader, sizeof(EEFS_FileHeader_t));
             EEFS_LIB_EEPROM_FLUSH;
         }
@@ -483,22 +472,22 @@ int32 EEFS_LibClose(int32 FileDescriptor)
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibClose() */
 
 /* Read from a file.  Returns the number of bytes read, 0 bytes if we have reached the end of file, or EEFS_INVALID_ARGUMENT
  * on error. */
-int32 EEFS_LibRead(int32 FileDescriptor, void *Buffer, uint32 Length)
+int32_t EEFS_LibRead(int8_t FileDescriptor, void *Buffer, uint32_t Length)
 {
-    uint32      BytesToRead;
-    int32       ReturnCode;
+    uint32_t      BytesToRead;
+    int32_t       ReturnCode;
 
     EEFS_LIB_LOCK;
     if (EEFS_LibIsValidFileDescriptor(FileDescriptor) == TRUE) {
 
         if (Buffer != NULL) {
-            
+
             if (EEFS_FileDescriptorTable[FileDescriptor].Mode & EEFS_FREAD) {
 
                 BytesToRead = EEFS_MIN((EEFS_FileDescriptorTable[FileDescriptor].FileSize - EEFS_FileDescriptorTable[FileDescriptor].ByteOffset), Length);
@@ -516,30 +505,30 @@ int32 EEFS_LibRead(int32 FileDescriptor, void *Buffer, uint32 Length)
         }
     }
     else { /* invalid file descriptor */
-        ReturnCode = EEFS_INVALID_ARGUMENT;
+        ReturnCode = EEFS_NO_SUCH_VOLUME;
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibRead() */
 
 /* Write to a file.  Returns the number of bytes written, 0 bytes if we have run out of memory or EEFS_INVALID_ARGUMENT
  * on error. */
-int32 EEFS_LibWrite(int32 FileDescriptor, void *Buffer, uint32 Length)
+int32_t EEFS_LibWrite(int8_t FileDescriptor, void *Buffer, uint32_t Length)
 {
-    uint32      BytesToWrite;
-    int32       ReturnCode;
+    uint32_t      BytesToWrite;
+    int32_t       ReturnCode;
 
     EEFS_LIB_LOCK;
     if (EEFS_LibIsValidFileDescriptor(FileDescriptor) == TRUE) {
 
         if (Buffer != NULL) {
-            
+
             if (EEFS_FileDescriptorTable[FileDescriptor].Mode & EEFS_FWRITE) {
 
                 BytesToWrite = EEFS_MIN((EEFS_FileDescriptorTable[FileDescriptor].MaxFileSize - EEFS_FileDescriptorTable[FileDescriptor].ByteOffset), Length);
-                EEFS_LIB_EEPROM_WRITE((void *)EEFS_FileDescriptorTable[FileDescriptor].FileDataPointer, Buffer, BytesToWrite);
+                EEFS_LIB_EEPROM_WRITE(EEFS_FileDescriptorTable[FileDescriptor].FileDataPointer, Buffer, BytesToWrite);
                 EEFS_FileDescriptorTable[FileDescriptor].FileDataPointer += BytesToWrite;
                 EEFS_FileDescriptorTable[FileDescriptor].ByteOffset += BytesToWrite;
                 if (EEFS_FileDescriptorTable[FileDescriptor].ByteOffset > EEFS_FileDescriptorTable[FileDescriptor].FileSize) {
@@ -556,23 +545,25 @@ int32 EEFS_LibWrite(int32 FileDescriptor, void *Buffer, uint32 Length)
         }
     }
     else { /* invalid file descriptor */
-        ReturnCode = EEFS_INVALID_ARGUMENT;
-    }   
+        ReturnCode = EEFS_NO_SUCH_VOLUME;
+    }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibWrite() */
 
-/* Set the file pointer to a specific offset in the file.  This implementation does not support seeking beyond the end of a file.  
- * If a ByteOffset is specified that is beyond the end of the file then the file pointer is set to the end of the file.  If 
- * a ByteOffset is specified that is less than the start of the file then an error is returned.  Returns the current file pointer 
+/* Set the file pointer to a specific offset in the file.  This implementation does not support seeking beyond the end of a file.
+ * If a ByteOffset is specified that is beyond the end of the file then the file pointer is set to the end of the file.  If
+ * a ByteOffset is specified that is less than the start of the file then an error is returned.  Returns the current file pointer
  * on success, or EEFS_INVALID_ARGUMENT on error. */
-int32 EEFS_LibLSeek(int32 FileDescriptor, int32 ByteOffset, uint16 Origin)
+int32_t EEFS_LibLSeek(int8_t FileDescriptor, int32_t ByteOffset, uint16_t Origin)
 {
-    void       *BeginningOfFilePointer;
-    void       *EndOfFilePointer;
-    int32       ReturnCode;
+//    void     *BeginningOfFilePointer;
+//    void     *EndOfFilePointer;
+    uint32_t    BeginningOfFilePointer;
+    uint32_t    EndOfFilePointer;
+    int32_t     ReturnCode;
 
     EEFS_LIB_LOCK;
     if (EEFS_LibIsValidFileDescriptor(FileDescriptor) == TRUE) {
@@ -585,7 +576,7 @@ int32 EEFS_LibLSeek(int32 FileDescriptor, int32 ByteOffset, uint16 Origin)
             if (ByteOffset < 0) {
                 ReturnCode = EEFS_INVALID_ARGUMENT;
             }
-            else if (ByteOffset > (int32)EEFS_FileDescriptorTable[FileDescriptor].FileSize) {
+            else if (ByteOffset > (int32_t)EEFS_FileDescriptorTable[FileDescriptor].FileSize) {
                 EEFS_FileDescriptorTable[FileDescriptor].FileDataPointer = EndOfFilePointer;
                 EEFS_FileDescriptorTable[FileDescriptor].ByteOffset = EEFS_FileDescriptorTable[FileDescriptor].FileSize;
                 ReturnCode = EEFS_FileDescriptorTable[FileDescriptor].ByteOffset;
@@ -598,10 +589,10 @@ int32 EEFS_LibLSeek(int32 FileDescriptor, int32 ByteOffset, uint16 Origin)
         }
         else if (Origin == SEEK_CUR) {
 
-            if ((int32)(ByteOffset + EEFS_FileDescriptorTable[FileDescriptor].ByteOffset) < 0) {
+            if ((int32_t)(ByteOffset + EEFS_FileDescriptorTable[FileDescriptor].ByteOffset) < 0) {
                 ReturnCode = EEFS_INVALID_ARGUMENT;
             }
-            else if ((int32)(ByteOffset + EEFS_FileDescriptorTable[FileDescriptor].ByteOffset) > (int32)EEFS_FileDescriptorTable[FileDescriptor].FileSize) {
+            else if ((int32_t)(ByteOffset + EEFS_FileDescriptorTable[FileDescriptor].ByteOffset) > (int32_t)EEFS_FileDescriptorTable[FileDescriptor].FileSize) {
                 EEFS_FileDescriptorTable[FileDescriptor].FileDataPointer = EndOfFilePointer;
                 EEFS_FileDescriptorTable[FileDescriptor].ByteOffset = EEFS_FileDescriptorTable[FileDescriptor].FileSize;
                 ReturnCode = EEFS_FileDescriptorTable[FileDescriptor].ByteOffset;
@@ -614,12 +605,12 @@ int32 EEFS_LibLSeek(int32 FileDescriptor, int32 ByteOffset, uint16 Origin)
         }
         else if (Origin == SEEK_END) {
 
-            if ((int32)(ByteOffset + EEFS_FileDescriptorTable[FileDescriptor].FileSize) < 0) {
+            if ((int32_t)(ByteOffset + EEFS_FileDescriptorTable[FileDescriptor].FileSize) < 0) {
                 ReturnCode = EEFS_INVALID_ARGUMENT;
             }
             else if (ByteOffset > 0) {
                 EEFS_FileDescriptorTable[FileDescriptor].FileDataPointer = EndOfFilePointer;
-                EEFS_FileDescriptorTable[FileDescriptor].ByteOffset = EEFS_FileDescriptorTable[FileDescriptor].FileSize;                
+                EEFS_FileDescriptorTable[FileDescriptor].ByteOffset = EEFS_FileDescriptorTable[FileDescriptor].FileSize;
                 ReturnCode = EEFS_FileDescriptorTable[FileDescriptor].ByteOffset;
             }
             else {
@@ -633,24 +624,24 @@ int32 EEFS_LibLSeek(int32 FileDescriptor, int32 ByteOffset, uint16 Origin)
         }
     }
     else { /* invalid file descriptor */
-        ReturnCode = EEFS_INVALID_ARGUMENT;
+        ReturnCode = EEFS_NO_SUCH_VOLUME;
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibLSeek() */
 
 /* Removes the specified file from the file system.  Note that this just marks the file as deleted and does not free the memory
  * in use by the file.  Once a file is deleted, the only way the slot can be reused is to manually write a new file into the
  * slot, i.e. there is no way to reuse the memory through a EEFS api function.  Returns a file descriptor on success,
  * EEFS_PERMISSION_DENIED, EEFS_FILE_NOT_FOUND or EEFS_INVALID_ARGUMENT on error. */
-int32 EEFS_LibRemove(EEFS_InodeTable_t *InodeTable, char *Filename)
+int8_t EEFS_LibRemove(EEFS_InodeTable_t *InodeTable, uint8_t *Filename)
 {
-    int32                           InodeIndex;
+    int32_t                         InodeIndex;
     EEFS_FileHeader_t               FileHeader;
-    int32                           ReturnCode;
-    
+    int32_t                         ReturnCode;
+
     EEFS_LIB_LOCK;
     if (InodeTable != NULL) {
 
@@ -663,14 +654,12 @@ int32 EEFS_LibRemove(EEFS_InodeTable_t *InodeTable, char *Filename)
 
                     /* Can't delete a read only file */
                     EEFS_LIB_EEPROM_READ(&FileHeader, InodeTable->File[InodeIndex].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-                    EEFS_SwapFileHeader(&FileHeader); /* APC */
                     if ((FileHeader.Attributes & EEFS_ATTRIBUTE_READONLY) == 0) {
 
                         /* Does the file have any open file descriptors */
                         if (EEFS_LibFmode(InodeTable, InodeIndex) == 0) {
 
                             memset(&FileHeader, 0, sizeof(EEFS_FileHeader_t)); /* clears the InUse flag marking the file deleted */
-                            EEFS_SwapFileHeader(&FileHeader); /* APC */
                             EEFS_LIB_EEPROM_WRITE(InodeTable->File[InodeIndex].FileHeaderPointer, &FileHeader, sizeof(EEFS_FileHeader_t));
                             EEFS_LIB_EEPROM_FLUSH;
                             ReturnCode = EEFS_SUCCESS;
@@ -700,17 +689,17 @@ int32 EEFS_LibRemove(EEFS_InodeTable_t *InodeTable, char *Filename)
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibRemove() */
 
 /* Renames the specified file.  Returns EEFS_SUCCESS on success, EEFS_PERMISSION_DENIED, EEFS_FILE_NOT_FOUND,
  * or EEFS_INVALID_ARGUMENT on error. */
-int32 EEFS_LibRename(EEFS_InodeTable_t *InodeTable, char *OldFilename, char *NewFilename)
+int8_t EEFS_LibRename(EEFS_InodeTable_t *InodeTable, uint8_t *OldFilename, uint8_t *NewFilename)
 {
-    int32                           InodeIndex;
+    int32_t                         InodeIndex;
     EEFS_FileHeader_t               FileHeader;
-    int32                           ReturnCode;
+    int8_t                          ReturnCode;
 
     EEFS_LIB_LOCK;
     if (InodeTable != NULL) {
@@ -727,11 +716,9 @@ int32 EEFS_LibRename(EEFS_InodeTable_t *InodeTable, char *OldFilename, char *New
 
                         /* Can't rename a read only file */
                         EEFS_LIB_EEPROM_READ(&FileHeader, InodeTable->File[InodeIndex].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-                         EEFS_SwapFileHeader(&FileHeader); /* APC */
                         if ((FileHeader.Attributes & EEFS_ATTRIBUTE_READONLY) == 0) {
 
-                            strncpy(FileHeader.Filename, NewFilename, EEFS_MAX_FILENAME_SIZE);
-                            EEFS_SwapFileHeader(&FileHeader); /* APC */
+                            strncpy((char *)FileHeader.Filename, (const char *)NewFilename, EEFS_MAX_FILENAME_SIZE);
                             EEFS_LIB_EEPROM_WRITE(InodeTable->File[InodeIndex].FileHeaderPointer, &FileHeader, sizeof(EEFS_FileHeader_t));
                             EEFS_LIB_EEPROM_FLUSH;
                             ReturnCode = EEFS_SUCCESS;
@@ -750,7 +737,7 @@ int32 EEFS_LibRename(EEFS_InodeTable_t *InodeTable, char *OldFilename, char *New
             }
             else { /* file system is write protected */
                 ReturnCode = EEFS_READ_ONLY_FILE_SYSTEM;
-            }                
+            }
         }
         else { /* invalid filename size */
             ReturnCode = EEFS_INVALID_ARGUMENT;
@@ -761,17 +748,17 @@ int32 EEFS_LibRename(EEFS_InodeTable_t *InodeTable, char *OldFilename, char *New
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibRename() */
 
 /* Returns file information for the specified filename in StatBuffer.  Returns EEFS_SUCCESS on success, EEFS_FILE_NOT_FOUND,
  * or EEFS_INVALID_ARGUMENT on error. */
-int32 EEFS_LibStat(EEFS_InodeTable_t *InodeTable, char *Filename, EEFS_Stat_t *StatBuffer)
+int8_t EEFS_LibStat(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, EEFS_Stat_t *StatBuffer)
 {
-    int32                           InodeIndex;
+    int32_t                         InodeIndex;
     EEFS_FileHeader_t               FileHeader;
-    int32                           ReturnCode;
+    int8_t                          ReturnCode;
 
     EEFS_LIB_LOCK;
     if (InodeTable != NULL)  {
@@ -783,14 +770,13 @@ int32 EEFS_LibStat(EEFS_InodeTable_t *InodeTable, char *Filename, EEFS_Stat_t *S
                 if ((InodeIndex = EEFS_LibFindFile(InodeTable, Filename)) != EEFS_FILE_NOT_FOUND) {
 
                     EEFS_LIB_EEPROM_READ(&FileHeader, InodeTable->File[InodeIndex].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-                    EEFS_SwapFileHeader(&FileHeader); /* APC */
                     StatBuffer->InodeIndex = InodeIndex;
                     StatBuffer->Attributes = FileHeader.Attributes;
                     StatBuffer->FileSize = FileHeader.FileSize;
                     StatBuffer->ModificationDate = FileHeader.ModificationDate;
                     StatBuffer->CreationDate = FileHeader.CreationDate;
                     StatBuffer->Crc = FileHeader.Crc;
-                    strncpy(StatBuffer->Filename, FileHeader.Filename, EEFS_MAX_FILENAME_SIZE);
+                    strncpy((char *)StatBuffer->Filename, (const char *)FileHeader.Filename, EEFS_MAX_FILENAME_SIZE);
                     ReturnCode = EEFS_SUCCESS;
                 }
                 else { /* file not found */
@@ -798,7 +784,7 @@ int32 EEFS_LibStat(EEFS_InodeTable_t *InodeTable, char *Filename, EEFS_Stat_t *S
                 }
             }
             else { /* invalid filename */
-                ReturnCode = EEFS_INVALID_ARGUMENT;
+                ReturnCode = EEFS_FILE_NOT_FOUND;
             }
         }
         else { /* invalid stat buffer */
@@ -810,31 +796,30 @@ int32 EEFS_LibStat(EEFS_InodeTable_t *InodeTable, char *Filename, EEFS_Stat_t *S
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibStat() */
 
-/* Returns file information for the specified file descriptor in StatBuffer.  Returns EEFS_SUCCESS on success or 
+/* Returns file information for the specified file descriptor in StatBuffer.  Returns EEFS_SUCCESS on success or
  * EEFS_INVALID_ARGUMENT on error. */
-int32 EEFS_LibFstat(int32 FileDescriptor, EEFS_Stat_t *StatBuffer)
+int8_t EEFS_LibFstat(int8_t FileDescriptor, EEFS_Stat_t *StatBuffer)
 {
     EEFS_FileHeader_t               FileHeader;
-    int32                           ReturnCode;
+    int8_t                          ReturnCode;
 
     EEFS_LIB_LOCK;
     if (EEFS_LibIsValidFileDescriptor(FileDescriptor) == TRUE) {
-    
+
         if (StatBuffer != NULL) {
 
             EEFS_LIB_EEPROM_READ(&FileHeader, EEFS_FileDescriptorTable[FileDescriptor].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-            EEFS_SwapFileHeader(&FileHeader); /* APC */
             StatBuffer->InodeIndex = EEFS_FileDescriptorTable[FileDescriptor].InodeIndex;
             StatBuffer->Attributes = FileHeader.Attributes;
             StatBuffer->FileSize = FileHeader.FileSize;
             StatBuffer->ModificationDate = FileHeader.ModificationDate;
             StatBuffer->CreationDate = FileHeader.CreationDate;
             StatBuffer->Crc = FileHeader.Crc;
-            strncpy(StatBuffer->Filename, FileHeader.Filename, EEFS_MAX_FILENAME_SIZE);
+            strncpy((char *)StatBuffer->Filename, (const char *)FileHeader.Filename, EEFS_MAX_FILENAME_SIZE);
             ReturnCode = EEFS_SUCCESS;
         }
         else { /* invalid stat buffer */
@@ -846,18 +831,18 @@ int32 EEFS_LibFstat(int32 FileDescriptor, EEFS_Stat_t *StatBuffer)
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibFstat() */
 
 /* Sets the Attributes for the specified file. Currently the only attribute that is supported is the EEFS_ATTRIBUTE_READONLY
  * attribute.  Returns EEFS_SUCCESS on success, EEFS_FILE_NOT_FOUND or EEFS_INVALID_ARGUMENT on error.  To read file
  * attributes use the stat function. */
-int32 EEFS_LibSetFileAttributes(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Attributes)
+int8_t EEFS_LibSetFileAttributes(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, uint32_t Attributes)
 {
-    int32                           InodeIndex;
+    int32_t                         InodeIndex;
     EEFS_FileHeader_t               FileHeader;
-    int32                           ReturnCode;
+    int8_t                          ReturnCode;
 
     EEFS_LIB_LOCK;
     if (InodeTable != NULL)  {
@@ -872,9 +857,7 @@ int32 EEFS_LibSetFileAttributes(EEFS_InodeTable_t *InodeTable, char *Filename, u
                     if ((InodeIndex = EEFS_LibFindFile(InodeTable, Filename)) != EEFS_FILE_NOT_FOUND) {
 
                         EEFS_LIB_EEPROM_READ(&FileHeader, InodeTable->File[InodeIndex].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-                        EEFS_SwapFileHeader(&FileHeader); /* APC */
                         FileHeader.Attributes = Attributes;
-                        EEFS_SwapFileHeader(&FileHeader); /* APC */
                         EEFS_LIB_EEPROM_WRITE(InodeTable->File[InodeIndex].FileHeaderPointer, &FileHeader, sizeof(EEFS_FileHeader_t));
                         EEFS_LIB_EEPROM_FLUSH;
                         ReturnCode = EEFS_SUCCESS;
@@ -888,7 +871,7 @@ int32 EEFS_LibSetFileAttributes(EEFS_InodeTable_t *InodeTable, char *Filename, u
                 }
             }
             else { /* invalid filename */
-                ReturnCode = EEFS_INVALID_ARGUMENT;
+                ReturnCode = EEFS_FILE_NOT_FOUND;
             }
         }
         else { /* invalid attributes */
@@ -900,8 +883,8 @@ int32 EEFS_LibSetFileAttributes(EEFS_InodeTable_t *InodeTable, char *Filename, u
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode); 
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibSetFileAttributes() */
 
 /* Opens a file system for reading the file directory.  This should be followed by calls to EEFS_ReadDir() and EEFS_CloseDir().
@@ -931,7 +914,7 @@ EEFS_DirectoryDescriptor_t *EEFS_LibOpenDir(EEFS_InodeTable_t *InodeTable)
 
     EEFS_LIB_UNLOCK;
     return(DirectoryDescriptor);
-    
+
 } /* End of EEFS_LibOpenDir() */
 
 /* Read the next file directory entry.  Returns a pointer to a EEFS_DirectoryEntry_t if successful or NULL if no more file
@@ -946,14 +929,13 @@ EEFS_DirectoryEntry_t *EEFS_LibReadDir(EEFS_DirectoryDescriptor_t *DirectoryDesc
     if (DirectoryDescriptor != NULL) {
 
         if (DirectoryDescriptor->InodeIndex < DirectoryDescriptor->InodeTable->NumberOfFiles) {
-            
+
             EEFS_LIB_EEPROM_READ(&FileHeader, DirectoryDescriptor->InodeTable->File[DirectoryDescriptor->InodeIndex].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-            EEFS_SwapFileHeader(&FileHeader); /* APC */
             EEFS_DirectoryEntry.InodeIndex = DirectoryDescriptor->InodeIndex;
             EEFS_DirectoryEntry.FileHeaderPointer = DirectoryDescriptor->InodeTable->File[DirectoryDescriptor->InodeIndex].FileHeaderPointer;
             EEFS_DirectoryEntry.MaxFileSize = DirectoryDescriptor->InodeTable->File[DirectoryDescriptor->InodeIndex].MaxFileSize;
             EEFS_DirectoryEntry.InUse = FileHeader.InUse;
-            strncpy(EEFS_DirectoryEntry.Filename, FileHeader.Filename, EEFS_MAX_FILENAME_SIZE);
+            strncpy((char *)EEFS_DirectoryEntry.Filename, (const char *)FileHeader.Filename, EEFS_MAX_FILENAME_SIZE);
             DirectoryDescriptor->InodeIndex++;
             DirectoryEntry = &EEFS_DirectoryEntry;
         }
@@ -967,13 +949,13 @@ EEFS_DirectoryEntry_t *EEFS_LibReadDir(EEFS_DirectoryDescriptor_t *DirectoryDesc
 
     EEFS_LIB_UNLOCK;
     return(DirectoryEntry);
-    
+
 } /* End of EEFS_LibReadDir() */
 
 /* Close file system for reading the file directory.  Returns EEFS_SUCCESS on success or EEFS_INVALID_ARGUMENT on error. */
-int32 EEFS_LibCloseDir(EEFS_DirectoryDescriptor_t *DirectoryDescriptor)
+int8_t EEFS_LibCloseDir(EEFS_DirectoryDescriptor_t *DirectoryDescriptor)
 {
-    int32                           ReturnCode;
+    int8_t                         ReturnCode;
 
     EEFS_LIB_LOCK;
     if (DirectoryDescriptor != NULL) {
@@ -985,7 +967,7 @@ int32 EEFS_LibCloseDir(EEFS_DirectoryDescriptor_t *DirectoryDescriptor)
             ReturnCode = EEFS_SUCCESS;
         }
         else { /* directory descriptor not in use */
-            ReturnCode = EEFS_INVALID_ARGUMENT;
+            ReturnCode = EEFS_NO_SUCH_VOLUME;
         }
     }
     else { /* invalid directory descriptor */
@@ -993,164 +975,156 @@ int32 EEFS_LibCloseDir(EEFS_DirectoryDescriptor_t *DirectoryDescriptor)
     }
 
     EEFS_LIB_UNLOCK;
-    return(ReturnCode);
-    
+    return ReturnCode;
+
 } /* End of EEFS_LibCloseDir() */
 
 /* Returns TRUE if any files in the file system are open. */
-uint8 EEFS_LibHasOpenFiles(EEFS_InodeTable_t *InodeTable)
+uint8_t EEFS_LibHasOpenFiles(EEFS_InodeTable_t *InodeTable)
 {
-    uint32  i;
-
-    for (i=0; i < EEFS_MAX_OPEN_FILES; i++) {
+    for (uint32_t i=0; i < EEFS_MAX_OPEN_FILES; ++i) {
         if ((EEFS_FileDescriptorTable[i].InUse == TRUE) &&
             (EEFS_FileDescriptorTable[i].InodeTable == InodeTable)) {
-            return(TRUE); /* a file is open */
+            return TRUE; /* a file is open */
         }
     }
-    return(FALSE);
-    
+    return FALSE;
+
 } /* End of EEFS_LibHasOpenFiles() */
 
 /* Returns TRUE if a directory is open. */
-uint8 EEFS_LibHasOpenDir(EEFS_InodeTable_t *InodeTable)
+uint8_t EEFS_LibHasOpenDir(EEFS_InodeTable_t *InodeTable)
 {
     if ((EEFS_DirectoryDescriptor.InUse == TRUE) &&
         (EEFS_DirectoryDescriptor.InodeTable == InodeTable)) {
-        return(TRUE); /* a directory is open */
+        return TRUE; /* a directory is open */
     }
-    return(FALSE);
-    
+    return FALSE;
+
 } /* End of EEFS_LibHasOpenDir() */
 
 /* Returns TRUE if any files in the file system are open for create. */
-uint8 EEFS_LibHasOpenCreat(EEFS_InodeTable_t *InodeTable)
+uint8_t EEFS_LibHasOpenCreat(EEFS_InodeTable_t *InodeTable)
 {
-    uint32  i;
-
-    for (i=0; i < EEFS_MAX_OPEN_FILES; i++) {
+	for (uint32_t i=0; i < EEFS_MAX_OPEN_FILES; ++i) {
         if ((EEFS_FileDescriptorTable[i].InUse == TRUE) &&
             (EEFS_FileDescriptorTable[i].InodeTable == InodeTable) &&
             (EEFS_FileDescriptorTable[i].Mode & EEFS_FCREAT)) {
-            return(TRUE); /* a file is open for creat */
+            return TRUE; /* a file is open for create */
         }
     }
-    return(FALSE);
-    
+    return FALSE;
+
 } /* End of EEFS_LibHasOpenCreat() */
 
-/* Searches the file descriptor table for entries that match the specified file and 
+/* Searches the file descriptor table for entries that match the specified file and
  * or's together all of the file mode flags.  The return bit mask will be EEFS_FREAD if
- * the file is open for read access, EEFS_WRITE if the file is open for write access, 
+ * the file is open for read access, EEFS_WRITE if the file is open for write access,
  * (EEFS_FREAD | EEFS_FWRITE) if the file is open for both read and write access, or
  * EEFS_CREAT if a new file is being created. */
-uint32 EEFS_LibFmode(EEFS_InodeTable_t *InodeTable, uint32 InodeIndex)
+uint32_t EEFS_LibFmode(EEFS_InodeTable_t *InodeTable, uint32_t InodeIndex)
 {
-    uint32      i;
-    uint32      Mode = 0;
+    uint32_t      Mode = 0;
 
-    for (i=0; i < EEFS_MAX_OPEN_FILES; i++) {
+    for (uint32_t i=0; i < EEFS_MAX_OPEN_FILES; ++i) {
         if ((EEFS_FileDescriptorTable[i].InUse == TRUE) &&
             (EEFS_FileDescriptorTable[i].InodeTable == InodeTable) &&
             (EEFS_FileDescriptorTable[i].InodeIndex == InodeIndex)) {
             Mode |= EEFS_FileDescriptorTable[i].Mode;
         }
     }
-    return(Mode);
-    
+    return Mode;
+
 } /* End of EEFS_LibFmode() */
 
 /* Performs a sequential search of the InodeTable looking for a matching Filename. */
-int32 EEFS_LibFindFile(EEFS_InodeTable_t *InodeTable, char *Filename)
+int8_t EEFS_LibFindFile(EEFS_InodeTable_t *InodeTable, uint8_t *Filename)
 {
-    uint32                          i;
     EEFS_FileHeader_t               FileHeader;
 
-    for (i=0; i < InodeTable->NumberOfFiles; i++) {
+    for (uint32_t i=0; i < InodeTable->NumberOfFiles; i++) {
         EEFS_LIB_EEPROM_READ(&FileHeader, InodeTable->File[i].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-        EEFS_SwapFileHeader(&FileHeader); /* APC */
         if ((FileHeader.InUse == TRUE) &&
-            (strncmp(Filename, FileHeader.Filename, EEFS_MAX_FILENAME_SIZE) == 0))
-            return(i);
+            (strncmp((const char *)Filename, (const char *)FileHeader.Filename, EEFS_MAX_FILENAME_SIZE) == 0))
+            return i;
     }
-    return(EEFS_FILE_NOT_FOUND);
-    
+    return EEFS_FILE_NOT_FOUND;
+
 } /* End of EEFS_LibFindFile() */
 
 /* Allocates a free entry in the FileDescriptorTable. */
-int32 EEFS_LibGetFileDescriptor(void)
+int8_t EEFS_LibGetFileDescriptor(void)
 {
-    uint32      i;
-    for (i=0; i < EEFS_MAX_OPEN_FILES; i++) {
+    for (uint32_t i=0; i < EEFS_MAX_OPEN_FILES; ++i) {
         if (EEFS_FileDescriptorTable[i].InUse == FALSE) {
             EEFS_FileDescriptorTable[i].InUse = TRUE;
             EEFS_FileDescriptorsInUse++;
             if (EEFS_FileDescriptorsInUse > EEFS_FileDescriptorsHighWaterMark) {
                 EEFS_FileDescriptorsHighWaterMark = EEFS_FileDescriptorsInUse;
             }
-            return(i);
+            return i;
         }
     }
-    return(EEFS_NO_FREE_FILE_DESCRIPTOR);
-    
+    return EEFS_NO_FREE_FILE_DESCRIPTOR;
+
 } /* End of EEFS_LibGetFileDescriptor() */
 
 /* Returns a entry to the FileDescriptorTable. */
-int32 EEFS_LibFreeFileDescriptor(int32 FileDescriptor)
+int8_t EEFS_LibFreeFileDescriptor(int8_t FileDescriptor)
 {
     if (EEFS_LibIsValidFileDescriptor(FileDescriptor) == TRUE) {
         memset(&EEFS_FileDescriptorTable[FileDescriptor], 0, sizeof(EEFS_FileDescriptor_t)); /* This sets InUse to FALSE */
         EEFS_FileDescriptorsInUse--;
-        return(EEFS_SUCCESS);
+        return EEFS_SUCCESS;
     }
-    return(EEFS_INVALID_ARGUMENT);
-    
+    return EEFS_INVALID_ARGUMENT;
+
 } /* End of EEFS_LibFreeFileDescriptor() */
 
 /* Returns TRUE is the specified File Descriptor is valid */
-uint8 EEFS_LibIsValidFileDescriptor(int32 FileDescriptor)
+uint8_t EEFS_LibIsValidFileDescriptor(int8_t FileDescriptor)
 {
     if ((FileDescriptor >= 0) &&
         (FileDescriptor < EEFS_MAX_OPEN_FILES) &&
         (EEFS_FileDescriptorTable[FileDescriptor].InUse == TRUE)) {
-        return(TRUE);
+        return TRUE;
     }
     else {
-        return(FALSE);
+        return FALSE;
     }
-    
+
 } /* End of EEFS_LibIsValidFileDescriptor() */
 
 /* Returns a pointer to the specified File Descriptor, or NULL if the specified
  * File Descriptor is not valid */
-EEFS_FileDescriptor_t *EEFS_LibFileDescriptor2Pointer(int32 FileDescriptor)
+EEFS_FileDescriptor_t *EEFS_LibFileDescriptor2Pointer(int8_t FileDescriptor)
 {
     if (EEFS_LibIsValidFileDescriptor(FileDescriptor)) {
-        return(&EEFS_FileDescriptorTable[FileDescriptor]);
+        return &EEFS_FileDescriptorTable[FileDescriptor];
     }
     else {
-        return(NULL);
+        return NULL;
     }
-    
+
 } /* End of EEFS_LibFileDescriptor2Pointer() */
 
 /* Validates the specified Filename. Probably need to be more strict on what I allow. */
-uint8 EEFS_LibIsValidFilename(char *Filename)
+uint8_t EEFS_LibIsValidFilename(uint8_t *Filename)
 {
     if ((Filename != NULL) &&
-        (strlen(Filename) < EEFS_MAX_FILENAME_SIZE) &&
-        (strlen(Filename) > 0))
-        return(TRUE);
+        (strlen((const char *)Filename) < EEFS_MAX_FILENAME_SIZE) &&
+        (strlen((const char *)Filename) > 0))
+        return TRUE;
     else
-        return(FALSE);
-        
+        return FALSE;
+
 } /* End of EEFS_LibIsValidFilename() */
 
 /* Perform consistency checks on the file system.  At the moment all this does is dumps the inode table. */
-int32 EEFS_LibChkDsk(EEFS_InodeTable_t *InodeTable, uint32 Flags)
+/* Assume that a serial port is already opened to dump the table to the serial output */
+int8_t EEFS_LibChkDsk(EEFS_InodeTable_t *InodeTable, uint32_t Flags)
 {
     EEFS_FileHeader_t               FileHeader;
-    uint32                          i;
 
 /* validate fat */
 /* validate checksum */
@@ -1161,70 +1135,65 @@ int32 EEFS_LibChkDsk(EEFS_InodeTable_t *InodeTable, uint32 Flags)
     (void)Flags;
 
     /* Dump the Inode Table and File Headers */
-    printf("Base Address:        %#lx\n", InodeTable->BaseAddress);
-    printf("Free Memory Pointer: %#lx\n", (uint32)InodeTable->FreeMemoryPointer);
-    printf("Free Memory Size:    %ld\n", InodeTable->FreeMemorySize);
-    printf("Number Of Files:     %ld\n", InodeTable->NumberOfFiles);
+    EEFS_PRINTF("Base Address:        %#lx\n", InodeTable->BaseAddress);
+    EEFS_PRINTF("Free Memory Pointer: %#lx\n", (uint32_t)InodeTable->FreeMemoryPointer);
+    EEFS_PRINTF("Free Memory Size:    %ld\n", InodeTable->FreeMemorySize);
+    EEFS_PRINTF("Number Of Files:     %ld\n", InodeTable->NumberOfFiles);
 
-    for (i=0; i < InodeTable->NumberOfFiles; i++) {
+    for (uint32_t i=0; i < InodeTable->NumberOfFiles; i++) {
 
-        printf("[%ld] FileHeaderPointer    %#lx\n", i, (uint32)InodeTable->File[i].FileHeaderPointer);
-        printf("[%ld] Max File Size        %ld\n", i, InodeTable->File[i].MaxFileSize);
+    	EEFS_PRINTF("[%ld] FileHeaderPointer    %#lx\n", i, (uint32_t)InodeTable->File[i].FileHeaderPointer);
+    	EEFS_PRINTF("[%ld] Max File Size        %ld\n", i, InodeTable->File[i].MaxFileSize);
 
         EEFS_LIB_EEPROM_READ(&FileHeader, InodeTable->File[i].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-        EEFS_SwapFileHeader(&FileHeader); /* APC */
-        printf("[%ld] Crc                  %#lx\n", i, FileHeader.Crc);
-        printf("[%ld] InUse                %ld\n", i, FileHeader.InUse);
-        printf("[%ld] Attributes           %#lx\n", i, FileHeader.Attributes);
-        printf("[%ld] FileSize             %ld\n", i, FileHeader.FileSize);
-        printf("[%ld] Modification Date    %ld\n", i, FileHeader.ModificationDate);
-        printf("[%ld] Creation Date        %ld\n", i, FileHeader.CreationDate);
-        printf("[%ld] Filename             %-40s\n", i, FileHeader.Filename);
+        EEFS_PRINTF("[%ld] Crc                  %#lx\n", i, FileHeader.Crc);
+        EEFS_PRINTF("[%ld] InUse                %ld\n", i, FileHeader.InUse);
+        EEFS_PRINTF("[%ld] Attributes           %#lx\n", i, FileHeader.Attributes);
+        EEFS_PRINTF("[%ld] FileSize             %ld\n", i, FileHeader.FileSize);
+        EEFS_PRINTF("[%ld] Modification Date    %ld\n", i, FileHeader.ModificationDate);
+        EEFS_PRINTF("[%ld] Creation Date        %ld\n", i, FileHeader.CreationDate);
+        EEFS_PRINTF("[%ld] Filename             %-40s\n", i, FileHeader.Filename);
     }
-    
-    return(EEFS_SUCCESS);
-    
+    return EEFS_SUCCESS;
+
 } /* End of EEFS_LibChkDsk() */
 
 /* Returns the number of file descriptors currently in use */
-uint32 EEFS_LibGetFileDescriptorsInUse(void)
+uint8_t EEFS_LibGetFileDescriptorsInUse(void)
 {
-    return(EEFS_FileDescriptorsInUse);
+    return EEFS_FileDescriptorsInUse;
 } /* End of EEFS_LibGetFileDescriptorsInUse() */
 
 /* Returns the file descriptors high water mark - useful for determining if the file descriptor table
  * is large enough */
-uint32 EEFS_LibGetFileDescriptorsHighWaterMark(void)
+uint8_t EEFS_LibGetFileDescriptorsHighWaterMark(void)
 {
-    return(EEFS_FileDescriptorsHighWaterMark);
+    return EEFS_FileDescriptorsHighWaterMark;
 } /* End of EEFS_LibGetFileDescriptorsHighWaterMark() */
 
 /* Returns the max number of files the file system can support */
-uint32 EEFS_LibGetMaxFiles(void)
+uint8_t EEFS_LibGetMaxFiles(void)
 {
-    return(EEFS_MAX_FILES);
+    return EEFS_MAX_FILES;
 } /* End of EEFS_LibGetMaxFiles() */
 
 /* Returns the max number of file descriptors */
-uint32 EEFS_LibGetMaxOpenFiles(void)
+uint8_t EEFS_LibGetMaxOpenFiles(void)
 {
-    return(EEFS_MAX_OPEN_FILES);
+    return EEFS_MAX_OPEN_FILES;
 } /* End of EEFS_LibGetMaxOpenFiles() */
 
 /* Prints the filenames of all open files for debugging */
 void EEFS_LibPrintOpenFiles(void)
 {
     EEFS_FileHeader_t           FileHeader;
-    uint32                      i;
 
-    for (i=0; i < EEFS_MAX_OPEN_FILES; i++) {
+    for (uint32_t i=0; i < EEFS_MAX_OPEN_FILES; ++i) {
         if (EEFS_FileDescriptorTable[i].InUse == TRUE) {
            EEFS_LIB_EEPROM_READ(&FileHeader, EEFS_FileDescriptorTable[i].FileHeaderPointer, sizeof(EEFS_FileHeader_t));
-           EEFS_SwapFileHeader(&FileHeader); /* APC */
-           printf("%s\n", FileHeader.Filename);
+           EEFS_PRINTF("%s\n", FileHeader.Filename);
         }
     }
-    
 } /* End of EEFS_LibPrintOpenFiles() */
 
 /************************/

@@ -1,11 +1,11 @@
 /*
 **
-**      Copyright (c) 2010-2014, United States government as represented by the 
-**      administrator of the National Aeronautics Space Administration.  
-**      All rights reserved. This software was created at NASAs Goddard 
+**      Copyright (c) 2010-2014, United States government as represented by the
+**      administrator of the National Aeronautics Space Administration.
+**      All rights reserved. This software was created at NASAs Goddard
 **      Space Flight Center pursuant to government contracts.
 **
-**      This is governed by the NASA Open Source Agreement and may be used, 
+**      This is governed by the NASA Open Source Agreement and may be used,
 **      distributed and modified only pursuant to the terms of that agreement.
 */
 
@@ -142,7 +142,7 @@
  *   EEPROM File System images are created using the geneepromfs tool.  This command line tool reads an input file that
  *   describes the files that will be included in the file system and outputs an EEPROM File System image ready to be
  *   burned into EEPROM.
- * 
+ *
  * References:
  *
  */
@@ -153,13 +153,18 @@
 /*
  * Includes
  */
+#include <stdio.h>
+
+#include "time.h"
 
 #include "common_types.h"
+
 #include "eefs_config.h"
 #include "eefs_version.h"
-#include <fcntl.h>
-#include <stdio.h>
-#include <time.h>
+#include "eefs_macros.h"
+
+#include "eefs_avrspi.h"
+
 
 /*
  * Macro Definitions
@@ -175,6 +180,31 @@
 #define EEFS_ATTRIBUTE_NONE             0
 #define EEFS_ATTRIBUTE_READONLY         1
 
+
+/*
+ * #include <fcntl.h>
+ * File status flags.
+ * Open flags begin with O_.
+ */
+
+#define	O_RDONLY	0x0000		/* open for reading only */
+
+#define	O_WRONLY	0x0001		/* open for writing only */
+#define	O_RDWR		0x0002		/* open for reading and writing */
+#define	O_ACCMODE	0x0003		/* mask for above modes */
+#define	O_NONBLOCK	0x0004		/* no delay */
+#define	O_APPEND	0x0008		/* set append mode */
+
+#define	O_SHLOCK	0x0010		/* open with shared file lock */
+#define	O_EXLOCK	0x0020		/* open with exclusive file lock */
+#define	O_ASYNC		0x0040		/* signal pgrp when data ready */
+#define	O_SYNC		0x0080		/* synch I/O file integrity */
+
+#define O_NOFOLLOW  0x0100      /* don't follow symbolic links */
+#define	O_CREAT		0x0200		/* create if nonexistent */
+#define	O_TRUNC		0x0400		/* truncate to zero length */
+#define	O_EXCL		0x0800		/* error if already exists */
+
 /*
  * File Modes
  */
@@ -187,21 +217,6 @@
 #define EEFS_FWRITE                     2       /* (O_WRONLY + 1) */
 #define EEFS_FCREAT                     4
 
-/*
- * Error Codes
- */
-
-#define EEFS_SUCCESS                   (0)
-#define EEFS_ERROR                    (-1)
-#define EEFS_INVALID_ARGUMENT         (-2)
-#define EEFS_UNSUPPORTED_OPTION       (-3)
-#define EEFS_PERMISSION_DENIED        (-4)
-#define EEFS_FILE_NOT_FOUND           (-5)
-#define EEFS_NO_FREE_FILE_DESCRIPTOR  (-6)
-#define EEFS_NO_SPACE_LEFT_ON_DEVICE  (-7)
-#define EEFS_NO_SUCH_DEVICE           (-8)
-#define EEFS_DEVICE_IS_BUSY           (-9)
-#define EEFS_READ_ONLY_FILE_SYSTEM   (-10)
 
 /*
  * Type Definitions
@@ -209,18 +224,18 @@
 
 typedef struct
 {
-    uint32                              Crc;
-    uint32                              Magic;
-    uint32                              Version;
-    uint32                              FreeMemoryOffset;
-    uint32                              FreeMemorySize;
-    uint32                              NumberOfFiles;
+    uint32_t                            Crc;
+    uint32_t                            Magic;
+    uint32_t                            Version;
+    uint32_t                            FreeMemoryOffset;
+    uint32_t                            FreeMemorySize;
+    uint32_t                            NumberOfFiles;
 } EEFS_FileAllocationTableHeader_t;
 
 typedef struct
 {
-    uint32                              FileHeaderOffset;   /* relative offset of the file header from the beginning of the file system */
-    uint32                              MaxFileSize;        /* max size of the slot in bytes (note this number does NOT include the file header) */
+    uint32_t                            FileHeaderOffset;   /* relative offset of the file header from the beginning of the file system */
+    uint32_t                            MaxFileSize;        /* max size of the slot in bytes (note this number does NOT include the file header) */
 } EEFS_FileAllocationTableEntry_t;
 
 typedef struct
@@ -231,88 +246,95 @@ typedef struct
 
 typedef struct
 {
-    uint32                              Crc;
-    uint32                              InUse;  /* if InUse is FALSE then the file has been deleted */
-    uint32                              Attributes;
-    uint32                              FileSize;
+    uint32_t                            Crc;
+    uint32_t                            InUse;  /* if InUse is FALSE then the file has been deleted */
+    uint32_t                            Attributes;
+    uint32_t                            FileSize;
     time_t                              ModificationDate;
     time_t                              CreationDate;
-    char                                Filename[EEFS_MAX_FILENAME_SIZE];
+    uint8_t                             Filename[EEFS_MAX_FILENAME_SIZE];
 } EEFS_FileHeader_t;
 
 typedef struct
 {
-    void                               *FileHeaderPointer;
-    uint32                              MaxFileSize;
+//  void                               *FileHeaderPointer;
+    uint32_t                            FileHeaderPointer;
+    uint32_t                            MaxFileSize;
 } EEFS_InodeTableEntry_t;
 
 typedef struct
 {
-    uint32                              BaseAddress;
-    void                               *FreeMemoryPointer;
-    uint32                              FreeMemorySize;
-    uint32                              NumberOfFiles;
+    uint32_t                            BaseAddress;
+//  void                               *FreeMemoryPointer;
+    uint32_t                            FreeMemoryPointer;
+    uint32_t                            FreeMemorySize;
+    uint32_t                            NumberOfFiles;
     EEFS_InodeTableEntry_t              File[EEFS_MAX_FILES];
 } EEFS_InodeTable_t;
 
 typedef struct
 {
-    uint32                              InUse;
-    uint32                              Mode;
-    void                               *FileHeaderPointer;
-    void                               *FileDataPointer;
-    uint32                              ByteOffset;
-    uint32                              FileSize;
-    uint32                              MaxFileSize;
+    uint32_t                            InUse;
+    uint32_t                            Mode;
+//  void                               *FileHeaderPointer;
+    uint32_t                            FileHeaderPointer;
+//  void                               *FileDataPointer;
+    uint32_t                            FileDataPointer;
+    uint32_t                            ByteOffset;
+    uint32_t                            FileSize;
+    uint32_t                            MaxFileSize;
     EEFS_InodeTable_t                  *InodeTable;
-    uint32                              InodeIndex;
+    uint32_t                            InodeIndex;
 } EEFS_FileDescriptor_t;
 
 typedef struct
 {
-    uint32                              InUse;
-    uint32                              InodeIndex;
+    uint32_t                            InUse;
+    uint32_t                            InodeIndex;
     EEFS_InodeTable_t                  *InodeTable;
 } EEFS_DirectoryDescriptor_t;
 
 typedef struct
 {
-    uint32                              InodeIndex;
-    char                                Filename[EEFS_MAX_FILENAME_SIZE];
-    uint32                              InUse;
-    void                               *FileHeaderPointer;
-    uint32                              MaxFileSize;
+    uint32_t                            InodeIndex;
+    uint8_t                             Filename[EEFS_MAX_FILENAME_SIZE];
+    uint32_t                            InUse;
+//  void                               *FileHeaderPointer;
+    uint32_t                            FileHeaderPointer;
+    uint32_t                            MaxFileSize;
 } EEFS_DirectoryEntry_t;
 
 typedef struct
 {
-    uint32                              InodeIndex;
-    uint32                              Crc;
-    uint32                              Attributes;
-    uint32                              FileSize;
+    uint32_t                            InodeIndex;
+    uint32_t                            Crc;
+    uint32_t                            Attributes;
+    uint32_t                            FileSize;
     time_t                              ModificationDate;
     time_t                              CreationDate;
-    char                                Filename[EEFS_MAX_FILENAME_SIZE];
+    uint8_t                             Filename[EEFS_MAX_FILENAME_SIZE];
 } EEFS_Stat_t;
 
 /*
  * Exported Functions
  */
 
-/* Initialize global data shared by all file systems */
-void                            EEFS_LibInit(void);
+/* Initialize global data shared by all file systems
+ * Called by EEFS_Init
+ */
+int8_t                          EEFS_LibInit(void);
 
 /* Initializes the Inode Table.  Returns EEFS_SUCCESS on success, EEFS_NO_SUCH_DEVICE or EEFS_INVALID_ARGUMENT on error. */
-int32                           EEFS_LibInitFS(EEFS_InodeTable_t *InodeTable, uint32 BaseAddress);
+int8_t                          EEFS_LibInitFS(EEFS_InodeTable_t *InodeTable, uint32_t BaseAddress);
 
 /* Clears the Inode Table.  Returns EEFS_SUCCESS on success, EEFS_DEVICE_IS_BUSY or EEFS_INVALID_ARGUMENT on error. */
-int32                           EEFS_LibFreeFS(EEFS_InodeTable_t *InodeTable);
+int8_t                          EEFS_LibFreeFS(EEFS_InodeTable_t *InodeTable);
 
 /* Opens the specified file for read or write access.  This function supports the following Flags (O_RDONLY, O_WRONLY,
  * O_RDWR, O_TRUNC, O_CREAT).  Files can always be opened for shared read access, however files cannot be opened more than
  * once for shared write access.  Returns a file descriptor on success, EEFS_NO_FREE_FILE_DESCRIPTOR, EEFS_PERMISSION_DENIED,
  * EEFS_INVALID_ARGUMENT, or EEFS_FILE_NOT_FOUND on error. */
-int32                           EEFS_LibOpen(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Flags, uint32 Attributes);
+int8_t                          EEFS_LibOpen(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, uint32_t Flags, uint32_t Attributes);
 
 /* Creates a new file and opens it for writing.  If the file already exists then the existing file is opened for write
  * access and the file is truncated.  If the file does not already exist then a new file is created.  Since we don't know
@@ -321,49 +343,49 @@ int32                           EEFS_LibOpen(EEFS_InodeTable_t *InodeTable, char
  * is allocated for the file while it is open, only one new file can be created at a time. Returns a file descriptor on
  * success, EEFS_NO_FREE_FILE_DESCRIPTOR, EEFS_PERMISSION_DENIED, EEFS_INVALID_ARGUMENT, or EEFS_NO_SPACE_LEFT_ON_DEVICE
  * on error.*/
-int32                           EEFS_LibCreat(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Attributes);
+int8_t                          EEFS_LibCreat(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, uint32_t Attributes);
 
 /* Closes a file.  Returns EEFS_SUCCESS on success or EEFS_INVALID_ARGUMENT on error.  If a new file is being created then the
  * MaxFileSize is updated to be the actual size of the file + EEFS_DEFAULT_CREAT_SPARE_BYTES. Note that the File Allocation
  * Table is not updated until the file is closed to reduce the number of EEPROM Writes. */
-int32                           EEFS_LibClose(int32 FileDescriptor);
+int8_t                          EEFS_LibClose(int8_t FileDescriptor);
 
 /* Read from a file.  Returns the number of bytes read, 0 bytes if we have reached the end of file, or EEFS_INVALID_ARGUMENT
  * on error. */
-int32                           EEFS_LibRead(int32 FileDescriptor, void *Buffer, uint32 Length);
+int32_t                         EEFS_LibRead(int8_t FileDescriptor, void *Buffer, uint32_t Length);
 
 /* Write to a file.  Returns the number of bytes written, 0 bytes if we have run out of memory or EEFS_INVALID_ARGUMENT
  * on error. */
-int32                           EEFS_LibWrite(int32 FileDescriptor, void *Buffer, uint32 Length);
+int32_t                         EEFS_LibWrite(int8_t FileDescriptor, void *Buffer, uint32_t Length);
 
-/* Set the file pointer to a specific offset in the file.  This implementation does not support seeking beyond the end of a file.  
- * If a ByteOffset is specified that is beyond the end of the file then the file pointer is set to the end of the file.  If 
- * a ByteOffset is specified that is less than the start of the file then an error is returned.  Returns the current file pointer 
+/* Set the file pointer to a specific offset in the file.  This implementation does not support seeking beyond the end of a file.
+ * If a ByteOffset is specified that is beyond the end of the file then the file pointer is set to the end of the file.  If
+ * a ByteOffset is specified that is less than the start of the file then an error is returned.  Returns the current file pointer
  * on success, or EEFS_INVALID_ARGUMENT on error. */
-int32                           EEFS_LibLSeek(int32 FileDescriptor, int32 ByteOffset, uint16 Origin);
+int32_t                         EEFS_LibLSeek(int8_t FileDescriptor, int32_t ByteOffset, uint16_t Origin);
 
 /* Removes the specified file from the file system.  Note that this just marks the file as deleted and does not free the memory
  * in use by the file.  Once a file is deleted, the only way the slot can be reused is to manually write a new file into the
  * slot, i.e. there is no way to reuse the memory through a EEFS api function.  Returns a file descriptor on success,
  * EEFS_PERMISSION_DENIED, EEFS_FILE_NOT_FOUND or EEFS_INVALID_ARGUMENT on error. */
-int32                           EEFS_LibRemove(EEFS_InodeTable_t *InodeTable, char *Filename);
+int8_t                          EEFS_LibRemove(EEFS_InodeTable_t *InodeTable, uint8_t *Filename);
 
 /* Renames the specified file.  Returns EEFS_SUCCESS on success, EEFS_PERMISSION_DENIED, EEFS_FILE_NOT_FOUND,
  * or EEFS_INVALID_ARGUMENT on error. */
-int32                           EEFS_LibRename(EEFS_InodeTable_t *InodeTable, char *OldFilename, char *NewFilename);
+int8_t                          EEFS_LibRename(EEFS_InodeTable_t *InodeTable, uint8_t *OldFilename, uint8_t *NewFilename);
 
 /* Returns file information for the specified filename in StatBuffer.  Returns EEFS_SUCCESS on success, EEFS_FILE_NOT_FOUND,
  * or EEFS_INVALID_ARGUMENT on error. */
-int32                           EEFS_LibStat(EEFS_InodeTable_t *InodeTable, char *Filename, EEFS_Stat_t *StatBuffer);
+int8_t                          EEFS_LibStat(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, EEFS_Stat_t *StatBuffer);
 
 /* Returns file information for the specified file descriptor in StatBuffer.  Returns EEFS_SUCCESS on success or
  * EEFS_INVALID_ARGUMENT on error. */
-int32                           EEFS_LibFstat(int32 FileDescriptor, EEFS_Stat_t *StatBuffer);
+int8_t                          EEFS_LibFstat(int8_t FileDescriptor, EEFS_Stat_t *StatBuffer);
 
 /* Sets the Attributes for the specified file. Currently the only attribute that is supported is the EEFS_ATTRIBUTE_READONLY
  * attribute.  Returns EEFS_SUCCESS on success, EEFS_FILE_NOT_FOUND or EEFS_INVALID_ARGUMENT on error.  To read file
  * attributes use the stat function. */
-int32                           EEFS_LibSetFileAttributes(EEFS_InodeTable_t *InodeTable, char *Filename, uint32 Attributes);
+int8_t                          EEFS_LibSetFileAttributes(EEFS_InodeTable_t *InodeTable, uint8_t *Filename, uint32_t Attributes);
 
 /* Opens a file system for reading the file directory.  This should be followed by calls to EEFS_ReadDir() and EEFS_CloseDir().
  * Note that currently only one process can read the file directory at a time.  Returns a pointer to a directory descriptor
@@ -376,40 +398,39 @@ EEFS_DirectoryDescriptor_t     *EEFS_LibOpenDir(EEFS_InodeTable_t *InodeTable);
 EEFS_DirectoryEntry_t          *EEFS_LibReadDir(EEFS_DirectoryDescriptor_t *DirectoryDescriptor);
 
 /* Close file system for reading the file directory.  Returns EEFS_SUCCESS on success or EEFS_INVALID_ARGUMENT on error. */
-int32                           EEFS_LibCloseDir(EEFS_DirectoryDescriptor_t *DirectoryDescriptor);
+int8_t                          EEFS_LibCloseDir(EEFS_DirectoryDescriptor_t *DirectoryDescriptor);
 
 /* Returns TRUE if any files in the file system are open. */
-uint8                           EEFS_LibHasOpenFiles(EEFS_InodeTable_t *InodeTable);
+uint8_t                         EEFS_LibHasOpenFiles(EEFS_InodeTable_t *InodeTable);
 
 /* Returns TRUE if a directory is open. */
-uint8                           EEFS_LibHasOpenDir(EEFS_InodeTable_t *InodeTable);
+uint8_t                         EEFS_LibHasOpenDir(EEFS_InodeTable_t *InodeTable);
 
 /* Returns a pointer to the specified File Descriptor, or NULL if the specified
  * File Descriptor is not valid */
-EEFS_FileDescriptor_t          *EEFS_LibFileDescriptor2Pointer(int32 FileDescriptor);
+EEFS_FileDescriptor_t          *EEFS_LibFileDescriptor2Pointer(int8_t FileDescriptor);
 
 /* Checks file system integrity and dumps the contents of the Inode Table and all File Headers */
-int32                           EEFS_LibChkDsk(EEFS_InodeTable_t *InodeTable, uint32 Flags);
+int8_t                          EEFS_LibChkDsk(EEFS_InodeTable_t *InodeTable, uint32_t Flags);
 
 /* Returns the number of file descriptors currently in use */
-uint32                          EEFS_LibGetFileDescriptorsInUse(void);
+uint8_t                         EEFS_LibGetFileDescriptorsInUse(void);
 
 /* Returns the file descriptors high water mark - useful for determining if the file descriptor table
  * is large enough */
-uint32                          EEFS_LibGetFileDescriptorsHighWaterMark(void);
+uint8_t                         EEFS_LibGetFileDescriptorsHighWaterMark(void);
 
 /* Returns the max number of files the file system can support */
-uint32                          EEFS_LibGetMaxFiles(void);
+uint8_t                         EEFS_LibGetMaxFiles(void);
 
 /* Returns the max number of file descriptors */
-uint32                          EEFS_LibGetMaxOpenFiles(void);
+uint8_t                         EEFS_LibGetMaxOpenFiles(void);
 
 /* Prints the filenames of all open files for debugging */
 void                            EEFS_LibPrintOpenFiles(void);
 
-#endif 
+#endif
 
 /************************/
 /*  End of File Comment */
 /************************/
-

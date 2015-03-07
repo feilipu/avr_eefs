@@ -41,7 +41,7 @@ DEBUGGER = -g
 
 COPT = $(WARNINGS) $(DEBUGGER) -D_ix86_ -m32 
 
-LOPT = -lm
+LOPT = -lm -m32
 
 ###############################################################################
 ## Rule to make the specified TARGET

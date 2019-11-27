@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
                 OutputMemoryMap(&FileSystem, CommandLineOptions.MapFilename);
 
             /* write the output file */
-            if ((OutputFilePointer = fopen(CommandLineOptions.OutputFilename, "w"))) {
+            if ((OutputFilePointer = fopen(CommandLineOptions.OutputFilename, "wb"))) {
 
                 /* Kludge to save off the current values of these variables before we byte swap the file system */
                 uint32      FreeMemoryOffset = FileSystem.FileAllocationTable->Header.FreeMemoryOffset;

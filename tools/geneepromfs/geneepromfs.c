@@ -172,7 +172,7 @@ void AddFile(FileSystem_t *FileSystem, char *InputFilename, char *EEFSFilename, 
 
         if (IsDuplicateFilename(FileSystem, EEFSFilename) == FALSE) {
 
-            if ((InputFilePointer = fopen(InputFilename, "r"))) {
+            if ((InputFilePointer = fopen(InputFilename, "rb"))) {
 
                 FileSize = Fsize(InputFilename);
                 MaxFileSize = ROUND_UP((FileSize + SpareBytes), 4); /* round the MaxFileSize up to the next 4 byte boundary */
